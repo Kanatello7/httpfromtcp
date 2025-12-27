@@ -42,7 +42,7 @@ func getLinesChannel(f io.ReadCloser) <-chan string {
 		defer close(lines)
 		currentLineContents := ""
 		for {
-			b := make([]byte, 8, 8)
+			b := make([]byte, 8)
 			n, err := f.Read(b)
 			if err != nil {
 				if currentLineContents != "" {
