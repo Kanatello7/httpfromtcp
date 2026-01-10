@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Kanatello7/httpfromtcp/internal/headers"
 	"github.com/Kanatello7/httpfromtcp/internal/request"
 	"github.com/Kanatello7/httpfromtcp/internal/response"
 	"github.com/Kanatello7/httpfromtcp/internal/server"
@@ -41,11 +43,32 @@ func handler(w *response.Writer, req *request.Request) {
 		handler500(w, req)
 		return
 	}
+	if targetPath == "/video" {
+		videoHandler(w, req)
+		return
+	}
 	if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin") {
 		proxyHandler(w, req)
 		return
 	}
+
 	handler200(w, req)
+}
+
+func videoHandler(w *response.Writer, _ *request.Request) {
+	w.WriteStatusLine(response.StatusCodeSuccess)
+	const filepath = "assets/vim.mp4"
+	videoBytes, err := os.ReadFile(filepath)
+	if err != nil {
+		handler500(w, nil)
+		return
+	}
+
+	h := response.GetDefaultHeaders(len(videoBytes))
+	h.Override("Content-Type", "video/mp4")
+	w.WriteHeaders(h)
+	w.WriteBody(videoBytes)
+
 }
 
 func proxyHandler(w *response.Writer, req *request.Request) {
@@ -62,9 +85,11 @@ func proxyHandler(w *response.Writer, req *request.Request) {
 	w.WriteStatusLine(response.StatusCodeSuccess)
 	h := response.GetDefaultHeaders(0)
 	h.Override("Transfer-Encoding", "chunked")
+	h.Override("Trailer", "X-Content-SHA256, X-Content-Length")
 	h.Remove("Content-Length")
 	w.WriteHeaders(h)
 
+	fullBody := make([]byte, 0)
 	const maxChunkSize = 1024
 	buffer := make([]byte, maxChunkSize)
 	for {
@@ -76,6 +101,7 @@ func proxyHandler(w *response.Writer, req *request.Request) {
 				fmt.Println("Error writing chunked body:", err)
 				break
 			}
+			fullBody = append(fullBody, buffer[:n]...)
 		}
 		if err == io.EOF {
 			break
@@ -88,6 +114,14 @@ func proxyHandler(w *response.Writer, req *request.Request) {
 	_, err = w.WriteChunkedBodyDone()
 	if err != nil {
 		fmt.Println("Error writing chunked body done:", err)
+	}
+	trailers := headers.NewHeaders()
+	sha256 := fmt.Sprintf("%x", sha256.Sum256(fullBody))
+	trailers.Override("X-Content-SHA256", sha256)
+	trailers.Override("X-Content-Length", fmt.Sprintf("%d", len(fullBody)))
+	err = w.WriteTrailers(trailers)
+	if err != nil {
+		fmt.Println("Error writing trailers:", err)
 	}
 }
 
