@@ -1,27 +1,31 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"net"
 	"sync/atomic"
 
+	"github.com/Kanatello7/httpfromtcp/internal/request"
 	"github.com/Kanatello7/httpfromtcp/internal/response"
 )
 
 // Server is an HTTP 1.1 server
 type Server struct {
 	listener net.Listener
+	handler  Handler
 	closed   atomic.Bool
 }
 
-func Serve(port int) (*Server, error) {
+func Serve(port int, handler Handler) (*Server, error) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{
 		listener: listener,
+		handler:  handler,
 	}
 	go s.listen()
 	return s, nil
@@ -51,7 +55,24 @@ func (s *Server) listen() {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
-	response.WriteStatusLine(conn, 200)
-	headers := response.GetDefaultHeaders(0)
+	req, err := request.RequestFromReader(conn)
+	if err != nil {
+		hErr := &HandlerError{
+			StatusCode: response.StatusCodeBadRequest,
+			Message:    err.Error(),
+		}
+		hErr.Write(conn)
+		return
+	}
+	buf := bytes.NewBuffer([]byte{})
+	hErr := s.handler(buf, req)
+	if hErr != nil {
+		hErr.Write(conn)
+		return
+	}
+	b := buf.Bytes()
+	response.WriteStatusLine(conn, response.StatusCodeSuccess)
+	headers := response.GetDefaultHeaders(len(b))
 	response.WriteHeaders(conn, headers)
+	conn.Write(b)
 }
